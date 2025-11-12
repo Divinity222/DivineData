@@ -1,167 +1,299 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Database of Divinity</title>
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-<style>
-body{font-family:Inter,system-ui,sans-serif;margin:40px auto;max-width:900px;padding:0 16px}
-h1{font-size:32px;margin:0}
-.card{border:1px solid #eee;border-radius:12px;padding:12px}
-button{cursor:pointer}
-input,textarea{width:100%;padding:6px}
-.role-tag{font-size:12px;padding:4px 8px;border:1px solid #ddd;border-radius:999px}
-.legend{font-size:14px;opacity:.8;margin-top:8px}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Database of Divinity</title>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    :root { --border:#eee; --muted:#6b7280; --danger:#b91c1c; }
+    * { box-sizing: border-box; }
+    body { font-family: Inter, system-ui, sans-serif; margin: 40px auto; max-width: 920px; padding: 0 16px; }
+    h1 { margin: 0; font-size: 32px; }
+    h3 { margin: 0 0 12px 0; }
+    a { color: inherit; }
+    input, textarea, select, button { font: inherit; }
+    input, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; }
+    textarea { min-height: 90px; resize: vertical; }
+    button { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: white; cursor: pointer; }
+    button.primary { background: #111827; color: white; border-color: #111827; }
+    button.ghost { background: transparent; }
+    .muted { color: var(--muted); }
+    .row { display: flex; gap: 12px; align-items: center; }
+    .row.wrap { flex-wrap: wrap; }
+    .grow { flex: 1; }
+    .card { border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: #fff; }
+    .tag { font-size: 12px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; }
+    .list { display: grid; gap: 12px; }
+    .legend { font-size: 14px; opacity: .85; margin-top: 6px; }
+    .danger { color: var(--danger); }
+    .dashed { border-style: dashed; }
+    .soft-red { background: #fffafa; }
+    .topbar { display:flex; align-items: baseline; gap: 12px; margin-bottom: 24px; }
+    .spacer { height: 8px; }
+  </style>
 </head>
 <body>
-<div id="app"></div>
+  <div id="app"></div>
 
-<script type="module">
-const { createClient } = window.supabase;
+  <script type="module">
+    const { createClient } = window.supabase;
 
-// fill in your Supabase info
-const supabaseUrl = "https://YOUR_PROJECT.supabase.co";
-const supabaseKey = "YOUR_ANON_KEY";
-const supabase = createClient(supabaseUrl, supabaseKey);
+    // 🔧 Replace with your Supabase info
+    const supabaseUrl = "https://YOUR_PROJECT.supabase.co";
+    const supabaseKey = "YOUR_ANON_KEY";
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
-const app = document.getElementById('app');
-let user = JSON.parse(localStorage.getItem('dod_user') || 'null');
+    const app = document.getElementById('app');
 
-async function sha256(text){
-  const enc = new TextEncoder().encode(text);
-  const buf = await crypto.subtle.digest('SHA-256', enc);
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-}
+    // Session: { username, role }
+    let session = readSession();
 
-function html(strings,...vals){return strings.map((s,i)=>s+(vals[i]??'')).join('')}
+    function saveSession(s) { localStorage.setItem('dod_session', JSON.stringify(s)); }
+    function readSession() { try { return JSON.parse(localStorage.getItem('dod_session') || 'null'); } catch { return null; } }
+    function clearSession() { localStorage.removeItem('dod_session'); }
 
-async function render(){
-  if(!user) return renderLogin();
+    function html(strings, ...vals) { return strings.map((s,i)=>s+(vals[i]??'')).join(''); }
 
-  const { data: links } = await supabase.from('link_stats').select('*').order('created_at',{ascending:false});
+    // ---------- Rendering ----------
+    async function render() {
+      if (!session) return renderLogin();
 
-  app.innerHTML = html`
-  <header style="display:flex;align-items:baseline;gap:12px;margin-bottom:24px;">
-    <h1>Database of Divinity</h1>
-    <span class="role-tag">${user.role}</span>
-    <div style="margin-left:auto"><button id="logout">Sign out</button></div>
-  </header>
-  <div class="legend">🟢 = up • 🔴 = down</div>
+      const links = await fetchLinks();
 
-  ${user.role==='Owner'?addForm():''}
-  ${user.role==='Owner'?await topRedPanel():''}
+      app.innerHTML = html`
+        <header class="topbar">
+          <h1>Database of Divinity</h1>
+          <span class="tag">${session.role}</span>
+          <div class="grow"></div>
+          <button id="logout" class="ghost">Sign out</button>
+        </header>
 
-  <section style="margin-top:24px">
-    <h3>All links</h3>
-    <div style="display:grid;gap:12px">
-      ${links.map(l=>linkCard(l)).join('')}
-    </div>
-  </section>`;
+        <div class="legend">Reactions: 🟢 means <b>up</b>, 🔴 means <b>down</b>.</div>
 
-  document.getElementById('logout').onclick=()=>{localStorage.removeItem('dod_user');user=null;render()};
+        ${session.role === 'Owner' ? addForm() : ''}
 
-  document.querySelectorAll('.react-btn').forEach(b=>b.onclick=()=>react(b.dataset.id,b.dataset.up==='true'));
-  document.querySelectorAll('.delete-btn').forEach(b=>b.onclick=()=>delLink(b.dataset.id));
-  document.getElementById('add-form')?.addEventListener('submit',createLink);
-}
+        ${session.role === 'Owner' ? await renderTopRed() : ''}
 
-function renderLogin(){
-  app.innerHTML=html`
-  <div style="max-width:360px;margin:80px auto;padding:24px;border:1px solid #eee;border-radius:12px;">
-    <h2>Sign in</h2>
-    <form id="login">
-      <div style="display:grid;gap:8px">
-        <input id="u" placeholder="Username" required>
-        <input id="p" type="password" placeholder="Password" required>
-        <button>Login</button>
-        <div id="err" style="color:crimson;font-size:12px"></div>
-      </div>
-    </form>
-  </div>`;
-  document.getElementById('login').onsubmit=async e=>{
-    e.preventDefault();
-    const uname=e.target.u.value.trim();
-    const pass=await sha256(e.target.p.value);
-    const {data}=await supabase.from('accounts').select('username,role,password_hash').eq('username',uname).single();
-    if(!data||data.password_hash!==pass){document.getElementById('err').innerText='Invalid credentials';return}
-    user={username:data.username,role:data.role};
-    localStorage.setItem('dod_user',JSON.stringify(user));
+        <section style="margin-top: 20px;">
+          <h3>All links</h3>
+          <div class="list">
+            ${links.map(l => linkCard(l)).join('')}
+          </div>
+        </section>
+      `;
+
+      document.getElementById('logout').onclick = () => { clearSession(); session = null; render(); };
+
+      // Add link (Owner only)
+      document.getElementById('add-form')?.addEventListener('submit', onCreateLink);
+
+      // Bind reactions
+      document.querySelectorAll('[data-react]').forEach(btn => {
+        btn.onclick = () => onReact(btn.dataset.id, btn.dataset.react === 'up');
+      });
+
+      // Bind delete (Admin + Owner)
+      document.querySelectorAll('[data-del]').forEach(btn => {
+        btn.onclick = () => onDeleteLink(btn.dataset.id);
+      });
+    }
+
+    function renderLogin() {
+      app.innerHTML = html`
+        <div class="card" style="max-width: 380px; margin: 80px auto;">
+          <h3 style="margin-bottom: 12px;">Sign in</h3>
+          <form id="login">
+            <div class="list">
+              <input id="username" placeholder="Username" required />
+              <input id="password" type="password" placeholder="Password" required />
+              <button class="primary" type="submit">Login</button>
+              <div id="err" class="muted"></div>
+            </div>
+          </form>
+          <div class="spacer"></div>
+          <div class="muted" style="font-size: 12px;">
+            Accounts are created by the Owner in the database.
+          </div>
+        </div>
+      `;
+      document.getElementById('login').onsubmit = onLogin;
+    }
+
+    function addForm() {
+      return html`
+        <section style="margin-top:16px;">
+          <div class="card">
+            <h3>Add a link</h3>
+            <form id="add-form">
+              <div class="list">
+                <input name="url" placeholder="https://example.com" required />
+                <textarea name="description" placeholder="Short description" required></textarea>
+                <div class="row wrap">
+                  <span class="muted" style="font-size:12px;">Who can access:</span>
+                  ${['Visitor','Admin','Owner'].map(r => html`
+                    <label class="row" style="gap:6px;"><input type="checkbox" name="allowed" value="${r}" ${r==='Visitor'?'checked':''}/> ${r}</label>
+                  `).join('')}
+                </div>
+                <div class="row">
+                  <div class="grow"></div>
+                  <button class="primary" type="submit">Create</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </section>
+      `;
+    }
+
+    function linkCard(l) {
+      const canDelete = ['Admin','Owner'].includes(session.role);
+      return html`
+        <div class="card">
+          <div class="row">
+            <a href="${l.url}" target="_blank" rel="noreferrer" style="font-weight: 600;">${l.url}</a>
+            <div class="grow"></div>
+            <button data-react="up" data-id="${l.id}">🟢</button><span class="muted">${l.green_count}</span>
+            <button data-react="down" data-id="${l.id}">🔴</button><span class="muted">${l.red_count}</span>
+            ${canDelete ? html`<button data-del="${l.id}" class="ghost" style="margin-left:6px;">Delete</button>` : ''}
+          </div>
+          <div style="margin-top:6px;">${l.description}</div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">Visible to: ${l.allowed_roles.join(', ')}</div>
+        </div>
+      `;
+    }
+
+    async function renderTopRed() {
+      const { data, error } = await supabase.from('top_red').select('*').limit(10);
+      if (error || !data?.length) return '';
+      return html`
+        <section style="margin-top: 20px;">
+          <h3>Top reported down (🔴)</h3>
+          <div class="list">
+            ${data.map(l => html`
+              <div class="card dashed soft-red">
+                <div class="row">
+                  <a href="${l.url}" target="_blank" rel="noreferrer" style="font-weight:600;">${l.url}</a>
+                  <div class="grow"></div>
+                  <span class="muted">🟢 ${l.green_count} · 🔴 ${l.red_count}</span>
+                </div>
+                <div style="margin-top:6px;">${l.description}</div>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    // ---------- Data helpers ----------
+    async function onLogin(e) {
+      e.preventDefault();
+      const u = e.target.username.value.trim();
+      const p = e.target.password.value;
+
+      // Call RPC that validates credentials and returns username, role
+      const { data, error } = await supabase.rpc('auth_login', {
+        p_username: u,
+        p_password: p
+      });
+
+      const errEl = document.getElementById('err');
+
+      if (error) {
+        errEl.textContent = `Login error: ${error.message}`;
+        return;
+      }
+      if (!data || !data.length) {
+        errEl.textContent = 'Invalid username or password';
+        return;
+      }
+
+      const { username, role } = data[0];
+      session = { username, role };
+      saveSession(session);
+      render();
+    }
+
+    async function fetchLinks() {
+      // Everyone reads from link_stats; visibility is enforced by how you set allowed_roles
+      // (Owner sees all; if you want DB-enforced visibility, add RLS policies checking a session role header.)
+      const { data, error } = await supabase
+        .from('link_stats')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('fetchLinks error', error);
+        return [];
+      }
+
+      // Client-side filter so non-Owners only see allowed roles
+      if (session.role !== 'Owner') {
+        return (data || []).filter(row => row.allowed_roles?.includes(session.role));
+      }
+      return data || [];
+    }
+
+    async function onCreateLink(e) {
+      e.preventDefault();
+      const url = e.target.url.value.trim();
+      const description = e.target.description.value.trim();
+      const allowed_roles = Array.from(e.target.querySelectorAll('input[name=allowed]:checked')).map(i => i.value);
+
+      if (!/^https?:\/\//i.test(url)) {
+        alert('URL must start with http:// or https://');
+        return;
+      }
+
+      const { error } = await supabase.from('links').insert({
+        url, description, allowed_roles, created_by: session.username
+      });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+      e.target.reset();
+      render();
+    }
+
+    async function onReact(link_id, is_up) {
+      // Upsert-style: check if this user already reacted to this link
+      const { data: existing, error: selErr } = await supabase
+        .from('reactions')
+        .select('id')
+        .eq('link_id', link_id)
+        .eq('username', session.username)
+        .maybeSingle();
+
+      if (selErr) {
+        alert(selErr.message);
+        return;
+      }
+
+      if (existing) {
+        const { error } = await supabase.from('reactions').update({ is_up }).eq('id', existing.id);
+        if (error) alert(error.message);
+      } else {
+        const { error } = await supabase.from('reactions').insert({ link_id: Number(link_id), username: session.username, is_up });
+        if (error) alert(error.message);
+      }
+      render();
+    }
+
+    async function onDeleteLink(id) {
+      if (!['Admin','Owner'].includes(session.role)) return;
+      if (!confirm('Delete this link?')) return;
+      const { error } = await supabase.from('links').delete().eq('id', id);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+      render();
+    }
+
+    // ---------- Boot ----------
     render();
-  };
-}
-
-function addForm(){
-  return html`<section style="margin-top:16px;padding:16px;border:1px solid #eee;border-radius:12px;">
-    <h3>Add link</h3>
-    <form id="add-form">
-      <input name="url" placeholder="https://example.com" required>
-      <textarea name="desc" placeholder="Description" required></textarea>
-      <div>
-        ${['Visitor','Admin','Owner'].map(r=>`
-          <label><input type="checkbox" name="role" value="${r}" ${r==='Visitor'?'checked':''}> ${r}</label>
-        `).join(' ')}
-      </div>
-      <button>Add</button>
-    </form>
-  </section>`;
-}
-
-async function createLink(e){
-  e.preventDefault();
-  const url=e.target.url.value.trim();
-  const desc=e.target.desc.value.trim();
-  const roles=Array.from(e.target.querySelectorAll('input[name=role]:checked')).map(i=>i.value);
-  const {error}=await supabase.from('links').insert({url,description:desc,allowed_roles:roles,created_by:user.username});
-  if(error)alert(error.message);else render();
-}
-
-async function react(id,is_up){
-  const {data:ex}=await supabase.from('reactions').select('id').eq('link_id',id).eq('username',user.username).maybeSingle();
-  if(ex)await supabase.from('reactions').update({is_up}).eq('id',ex.id);
-  else await supabase.from('reactions').insert({link_id:id,username:user.username,is_up});
-  render();
-}
-
-async function delLink(id){
-  if(!confirm('Delete this link?'))return;
-  await supabase.from('links').delete().eq('id',id);
-  render();
-}
-
-async function topRedPanel(){
-  const {data}=await supabase.from('top_red').select('*').limit(10);
-  if(!data?.length)return'';
-  return html`<section style="margin-top:24px"><h3>Top reported down 🔴</h3>
-  <div style="display:grid;gap:12px">
-    ${data.map(l=>`<div class="card" style="border:1px dashed #f2c5c5;background:#fffafa">
-      <div style="display:flex;align-items:center">
-        <a href="${l.url}" target="_blank">${l.url}</a>
-        <div style="margin-left:auto;font-size:12px">🟢 ${l.green_count} · 🔴 ${l.red_count}</div>
-      </div>
-      <div>${l.description}</div>
-    </div>`).join('')}
-  </div></section>`;
-}
-
-function linkCard(l){
-  const canDel=['Admin','Owner'].includes(user.role);
-  return html`<div class="card">
-    <div style="display:flex;gap:8px;align-items:center">
-      <a href="${l.url}" target="_blank">${l.url}</a>
-      <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
-        <button class="react-btn" data-id="${l.id}" data-up="true">🟢</button><span>${l.green_count}</span>
-        <button class="react-btn" data-id="${l.id}" data-up="false">🔴</button><span>${l.red_count}</span>
-        ${canDel?`<button class="delete-btn" data-id="${l.id}">Delete</button>`:''}
-      </div>
-    </div>
-    <div>${l.description}</div>
-    <div style="font-size:12px;opacity:.7">Visible to: ${l.allowed_roles.join(', ')}</div>
-  </div>`;
-}
-
-render();
-</script>
+  </script>
 </body>
 </html>
