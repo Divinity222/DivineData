@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Database of Divinity</title>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif;margin:40px auto;max-width:900px;padding:0 16px}
+h1{font-size:32px;margin:0}
+.card{border:1px solid #eee;border-radius:12px;padding:12px}
+button{cursor:pointer}
+input,textarea{width:100%;padding:6px}
+.role-tag{font-size:12px;padding:4px 8px;border:1px solid #ddd;border-radius:999px}
+.legend{font-size:14px;opacity:.8;margin-top:8px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script type="module">
+const { createClient } = window.supabase;
+
+// fill in your Supabase info
+const supabaseUrl = "https://YOUR_PROJECT.supabase.co";
+const supabaseKey = "YOUR_ANON_KEY";
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const app = document.getElementById('app');
+let user = JSON.parse(localStorage.getItem('dod_user') || 'null');
+
+async function sha256(text){
+  const enc = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function html(strings,...vals){return strings.map((s,i)=>s+(vals[i]??'')).join('')}
+
+async function render(){
+  if(!user) return renderLogin();
+
+  const { data: links } = await supabase.from('link_stats').select('*').order('created_at',{ascending:false});
+
+  app.innerHTML = html`
+  <header style="display:flex;align-items:baseline;gap:12px;margin-bottom:24px;">
+    <h1>Database of Divinity</h1>
+    <span class="role-tag">${user.role}</span>
+    <div style="margin-left:auto"><button id="logout">Sign out</button></div>
+  </header>
+  <div class="legend">🟢 = up • 🔴 = down</div>
+
+  ${user.role==='Owner'?addForm():''}
+  ${user.role==='Owner'?await topRedPanel():''}
+
+  <section style="margin-top:24px">
+    <h3>All links</h3>
+    <div style="display:grid;gap:12px">
+      ${links.map(l=>linkCard(l)).join('')}
+    </div>
+  </section>`;
+
+  document.getElementById('logout').onclick=()=>{localStorage.removeItem('dod_user');user=null;render()};
+
+  document.querySelectorAll('.react-btn').forEach(b=>b.onclick=()=>react(b.dataset.id,b.dataset.up==='true'));
+  document.querySelectorAll('.delete-btn').forEach(b=>b.onclick=()=>delLink(b.dataset.id));
+  document.getElementById('add-form')?.addEventListener('submit',createLink);
+}
+
+function renderLogin(){
+  app.innerHTML=html`
+  <div style="max-width:360px;margin:80px auto;padding:24px;border:1px solid #eee;border-radius:12px;">
+    <h2>Sign in</h2>
+    <form id="login">
+      <div style="display:grid;gap:8px">
+        <input id="u" placeholder="Username" required>
+        <input id="p" type="password" placeholder="Password" required>
+        <button>Login</button>
+        <div id="err" style="color:crimson;font-size:12px"></div>
+      </div>
+    </form>
+  </div>`;
+  document.getElementById('login').onsubmit=async e=>{
+    e.preventDefault();
+    const uname=e.target.u.value.trim();
+    const pass=await sha256(e.target.p.value);
+    const {data}=await supabase.from('accounts').select('username,role,password_hash').eq('username',uname).single();
+    if(!data||data.password_hash!==pass){document.getElementById('err').innerText='Invalid credentials';return}
+    user={username:data.username,role:data.role};
+    localStorage.setItem('dod_user',JSON.stringify(user));
+    render();
+  };
+}
+
+function addForm(){
+  return html`<section style="margin-top:16px;padding:16px;border:1px solid #eee;border-radius:12px;">
+    <h3>Add link</h3>
+    <form id="add-form">
+      <input name="url" placeholder="https://example.com" required>
+      <textarea name="desc" placeholder="Description" required></textarea>
+      <div>
+        ${['Visitor','Admin','Owner'].map(r=>`
+          <label><input type="checkbox" name="role" value="${r}" ${r==='Visitor'?'checked':''}> ${r}</label>
+        `).join(' ')}
+      </div>
+      <button>Add</button>
+    </form>
+  </section>`;
+}
+
+async function createLink(e){
+  e.preventDefault();
+  const url=e.target.url.value.trim();
+  const desc=e.target.desc.value.trim();
+  const roles=Array.from(e.target.querySelectorAll('input[name=role]:checked')).map(i=>i.value);
+  const {error}=await supabase.from('links').insert({url,description:desc,allowed_roles:roles,created_by:user.username});
+  if(error)alert(error.message);else render();
+}
+
+async function react(id,is_up){
+  const {data:ex}=await supabase.from('reactions').select('id').eq('link_id',id).eq('username',user.username).maybeSingle();
+  if(ex)await supabase.from('reactions').update({is_up}).eq('id',ex.id);
+  else await supabase.from('reactions').insert({link_id:id,username:user.username,is_up});
+  render();
+}
+
+async function delLink(id){
+  if(!confirm('Delete this link?'))return;
+  await supabase.from('links').delete().eq('id',id);
+  render();
+}
+
+async function topRedPanel(){
+  const {data}=await supabase.from('top_red').select('*').limit(10);
+  if(!data?.length)return'';
+  return html`<section style="margin-top:24px"><h3>Top reported down 🔴</h3>
+  <div style="display:grid;gap:12px">
+    ${data.map(l=>`<div class="card" style="border:1px dashed #f2c5c5;background:#fffafa">
+      <div style="display:flex;align-items:center">
+        <a href="${l.url}" target="_blank">${l.url}</a>
+        <div style="margin-left:auto;font-size:12px">🟢 ${l.green_count} · 🔴 ${l.red_count}</div>
+      </div>
+      <div>${l.description}</div>
+    </div>`).join('')}
+  </div></section>`;
+}
+
+function linkCard(l){
+  const canDel=['Admin','Owner'].includes(user.role);
+  return html`<div class="card">
+    <div style="display:flex;gap:8px;align-items:center">
+      <a href="${l.url}" target="_blank">${l.url}</a>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <button class="react-btn" data-id="${l.id}" data-up="true">🟢</button><span>${l.green_count}</span>
+        <button class="react-btn" data-id="${l.id}" data-up="false">🔴</button><span>${l.red_count}</span>
+        ${canDel?`<button class="delete-btn" data-id="${l.id}">Delete</button>`:''}
+      </div>
+    </div>
+    <div>${l.description}</div>
+    <div style="font-size:12px;opacity:.7">Visible to: ${l.allowed_roles.join(', ')}</div>
+  </div>`;
+}
+
+render();
+</script>
+</body>
+</html>
